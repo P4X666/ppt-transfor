@@ -1,0 +1,25 @@
+[project]
+name = "ppt-transfor"
+version = "0.1.0"
+description = "PPT ↔ JSON 双向转换服务，支持往返对比定位解析/渲染缺陷"
+requires-python = ">=3.13"
+dependencies = [
+    "click>=8.4.1",
+    "pydantic>=2.13.4",
+    "python-pptx>=1.0.2",
+    "rich>=15.0.0",
+    "PyMuPDF>=1.24.0",
+    "Pillow>=10.0.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/ppt_transfor"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0.0",
+]
