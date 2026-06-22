@@ -66,4 +66,13 @@ def render_table(slide, model: Shape):
             # 文本
             render_text_frame(cell.text_frame, cell_model.text)
 
+            # 单元格填充：回写到 <a:tcPr>，覆盖 add_table 默认蓝色样式
+            if cell_model.fill is not None:
+                try:
+                    from ppt_transfor.renderer.shape import _apply_fill
+
+                    _apply_fill(cell.fill, cell_model.fill, None)
+                except Exception:
+                    pass
+
     return graphic_frame

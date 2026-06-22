@@ -216,6 +216,27 @@ def _parse_line(line, prs=None) -> Line | None:
     except Exception:
         pass
 
+    # 箭头线端点：从 <a:ln> 的 <a:headEnd>/<a:tailEnd> 读取 type 属性
+    try:
+        from pptx.oxml.ns import qn
+
+        ln_el = line._ln
+        if ln_el is not None:
+            head_end = ln_el.find(qn("a:headEnd"))
+            if head_end is not None:
+                head_type = head_end.get("type")
+                if head_type:
+                    model.head_arrow_type = head_type
+                    has_value = True
+            tail_end = ln_el.find(qn("a:tailEnd"))
+            if tail_end is not None:
+                tail_type = tail_end.get("type")
+                if tail_type:
+                    model.tail_arrow_type = tail_type
+                    has_value = True
+    except Exception:
+        pass
+
     return model if has_value else None
 
 
@@ -439,9 +460,24 @@ def parse_shape(shape, slide=None, prs=None) -> Shape:
         return model
 
     if st == MSO_SHAPE_TYPE.AUTO_SHAPE:
-        model.shape_type = "auto_shape"
         from ppt_transfor.parser.autoshape import parse_autoshape
         auto_fields = parse_autoshape(shape)
+
+        # 无 auto_shape_type 且 line 有箭头 → 本质是带箭头的直线，重分类为 connector
+        # 避免降级为文本框导致线条和箭头完全丢失
+        if auto_fields.get("auto_shape_type") is None:
+            line_model = getattr(model, "line", None)
+            if line_model is not None and (
+                line_model.head_arrow_type or line_model.tail_arrow_type
+            ):
+                model.shape_type = "connector"
+                from ppt_transfor.parser.connector import parse_connector
+                conn_fields = parse_connector(shape)
+                for k, v in conn_fields.items():
+                    setattr(model, k, v)
+                return model
+
+        model.shape_type = "auto_shape"
         for k, v in auto_fields.items():
             setattr(model, k, v)
         # 自选图形通常有文本

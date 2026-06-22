@@ -161,6 +161,29 @@ def _apply_line(line, line_model: Line | None) -> None:
         except (KeyError, ValueError, Exception):
             pass
 
+    # 箭头线端点：回写 <a:headEnd>/<a:tailEnd> 到 <a:ln>
+    # 必须在 width/color/dash 设置之后执行，确保 <a:ln> 已存在
+    if line_model.head_arrow_type or line_model.tail_arrow_type:
+        try:
+            from lxml import etree
+
+            ln_el = line._ln
+            if ln_el is not None:
+                # 清除现有箭头
+                for tag in ("headEnd", "tailEnd"):
+                    existing = ln_el.find(qn(f"a:{tag}"))
+                    if existing is not None:
+                        ln_el.remove(existing)
+                # 写入新箭头
+                if line_model.head_arrow_type:
+                    head = etree.SubElement(ln_el, qn("a:headEnd"))
+                    head.set("type", line_model.head_arrow_type)
+                if line_model.tail_arrow_type:
+                    tail = etree.SubElement(ln_el, qn("a:tailEnd"))
+                    tail.set("type", line_model.tail_arrow_type)
+        except Exception:
+            pass
+
 
 def _apply_common_props(shape, model: Shape, slide_bg_color: Color | None = None) -> None:
     """回写通用属性（位置/旋转/填充/边框/阴影）"""

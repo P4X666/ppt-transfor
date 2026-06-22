@@ -49,6 +49,17 @@ def parse_table(shape, prs=None) -> Table:
             except Exception:
                 cell_model.span_y = 1
 
+            # 单元格填充：解析 <a:tcPr> 下的 solidFill 等，主题色固化为 RGB
+            # 未解析填充会导致表头颜色丢失（add_table 默认蓝色样式）
+            try:
+                from ppt_transfor.parser.shape import _parse_fill
+
+                cell_fill = _parse_fill(cell.fill, cell._tc, prs)
+                if cell_fill is not None:
+                    cell_model.fill = cell_fill
+            except Exception:
+                pass
+
             row_cells.append(cell_model)
         cells.append(row_cells)
 

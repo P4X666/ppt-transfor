@@ -5,7 +5,9 @@
 
 from __future__ import annotations
 
-from ppt_transfor.models.schema import Color, Slide
+from pptx.enum.shapes import MSO_SHAPE_TYPE
+
+from ppt_transfor.models.schema import Color, Shape, Slide
 from ppt_transfor.parser.shape import parse_shape
 from ppt_transfor.utils.inheritance import resolve_background
 
@@ -144,6 +146,67 @@ def _ensure_text_visibility(slide_model: Slide) -> None:
         _ensure_shape_text_visibility(slide_model, shape_model, CONTRAST_THRESHOLD)
 
 
+def _parse_inherited_pictures(slide, prs=None) -> list[Shape]:
+    """解析布局和母版上的图片形状，返回 Shape 列表。
+
+    转换后 PPT 使用 Blank 布局，布局/母版继承的图片会丢失。
+    此函数将布局/母版的 <p:pic> 提取为幻灯片级图片形状，保证视觉保真。
+    渲染顺序：母版图片在底层（先渲染），布局图片在上层（后渲染）。
+    """
+    pictures: list[Shape] = []
+    seen_blobs: set[str] = set()
+
+    # 收集容器：布局在前，母版在后
+    containers = []
+    try:
+        containers.append(slide.slide_layout)
+    except Exception:
+        pass
+    try:
+        containers.append(slide.slide_layout.slide_master)
+    except Exception:
+        pass
+
+    # 反向遍历：母版图片先加入列表（渲染时在底层），布局图片后加入（在上层）
+    for container in reversed(containers):
+        try:
+            for shape in container.shapes:
+                try:
+                    if shape.shape_type != MSO_SHAPE_TYPE.PICTURE:
+                        continue
+                except Exception:
+                    continue
+
+                from ppt_transfor.parser.image import parse_picture
+
+                pic_fields = parse_picture(shape)
+                if not pic_fields.get("data_base64"):
+                    continue
+
+                # 去重：同一图片在母版和布局都有时只保留一个
+                blob_key = pic_fields["data_base64"][:100]
+                if blob_key in seen_blobs:
+                    continue
+                seen_blobs.add(blob_key)
+
+                model = Shape(
+                    shape_id=str(getattr(shape, "shape_id", "") or ""),
+                    name=getattr(shape, "name", None),
+                    shape_type="picture",
+                    left=int(shape.left) if shape.left is not None else None,
+                    top=int(shape.top) if shape.top is not None else None,
+                    width=int(shape.width) if shape.width is not None else None,
+                    height=int(shape.height) if shape.height is not None else None,
+                )
+                for k, v in pic_fields.items():
+                    setattr(model, k, v)
+                pictures.append(model)
+        except Exception:
+            pass
+
+    return pictures
+
+
 def parse_slide(slide, index: int, prs=None) -> Slide:
     """解析单页幻灯片
 
@@ -168,6 +231,12 @@ def parse_slide(slide, index: int, prs=None) -> Slide:
     # 遍历形状
     for shape in slide.shapes:
         model.shapes.append(parse_shape(shape, slide, prs))
+
+    # 前置布局/母版继承的图片（渲染在底层，保证视觉保真）
+    # 转换后 PPT 使用 Blank 布局，不提取则布局/母版图片全部丢失
+    inherited_pictures = _parse_inherited_pictures(slide, prs)
+    if inherited_pictures:
+        model.shapes = inherited_pictures + model.shapes
 
     # 后处理：修正低对比度文本，保证转换后可见
     _ensure_text_visibility(model)

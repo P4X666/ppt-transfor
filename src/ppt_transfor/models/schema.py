@@ -103,6 +103,9 @@ class Line(BaseModel):
     width: Optional[int] = None
     color: Optional[Color] = None
     dash: Optional[str] = None
+    # 箭头线端点类型（如 "triangle"），对应 OpenXML <a:headEnd>/<a:tailEnd> 的 type 属性
+    head_arrow_type: Optional[str] = None
+    tail_arrow_type: Optional[str] = None
 
 
 class Shadow(BaseModel):
