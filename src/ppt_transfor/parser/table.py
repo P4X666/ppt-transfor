@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from ppt_transfor.models.schema import TableCell, Table
 from ppt_transfor.parser.text import parse_text_frame
+from ppt_transfor.utils.inheritance import extract_txbody_default_props
 
 
 def parse_table(shape, prs=None) -> Table:
@@ -33,8 +34,9 @@ def parse_table(shape, prs=None) -> Table:
             cell = tbl.cell(row_idx, col_idx)
             cell_model = TableCell()
 
-            # 文本
-            cell_model.text = parse_text_frame(cell.text_frame, prs)
+            # 文本：传入单元格默认样式，避免对齐/字号丢失
+            cell_defaults = extract_txbody_default_props(cell.text_frame._element, prs)
+            cell_model.text = parse_text_frame(cell.text_frame, prs, cell_defaults)
 
             # 合并信息：span_x 为横向合并数，span_y 为纵向合并数
             # python-pptx 通过 cell.span_x / cell.span_y 获取

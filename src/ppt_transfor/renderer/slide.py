@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import logging
 
-from ppt_transfor.models.schema import Background, Slide
+from ppt_transfor.models.schema import Background, Color, Slide
 from ppt_transfor.renderer.shape import render_shape
 from ppt_transfor.utils.color import apply_color
 
@@ -23,6 +23,10 @@ def _apply_background(slide, bg: Background | None) -> None:
     if bg is None or bg.type == "none":
         return
 
+    # solid 背景无颜色时不设置，避免默认黑色背景
+    if bg.type == "solid" and bg.color is None:
+        return
+
     try:
         fill = slide.background.fill
         if bg.type == "solid":
@@ -31,6 +35,15 @@ def _apply_background(slide, bg: Background | None) -> None:
                 apply_color(fill.fore_color, bg.color)
     except Exception as e:
         logger.warning("背景渲染失败: %s, bg=%s", e, bg)
+
+
+def _slide_bg_color(slide_model: Slide) -> Color | None:
+    """从 Slide 模型的背景中提取 solid RGB 颜色，供 BACKGROUND 填充兜底使用。"""
+    if slide_model.background is None:
+        return None
+    if slide_model.background.type != "solid":
+        return None
+    return slide_model.background.color
 
 
 def render_slide(prs, slide_model: Slide):
@@ -59,8 +72,11 @@ def render_slide(prs, slide_model: Slide):
     # 背景
     _apply_background(slide, slide_model.background)
 
+    # 提取 solid 背景色，供 BACKGROUND 填充形状兜底
+    slide_bg_color = _slide_bg_color(slide_model)
+
     # 遍历渲染形状
     for shape_model in slide_model.shapes:
-        render_shape(slide, shape_model)
+        render_shape(slide, shape_model, slide_bg_color)
 
     return slide

@@ -14,12 +14,17 @@ from ppt_transfor.models.schema import Presentation
 from ppt_transfor.renderer.slide import render_slide
 
 
-def render_presentation(model: Presentation, output_path: str | Path) -> str:
+def render_presentation(
+    model: Presentation,
+    output_path: str | Path,
+    source_pptx_path: str | Path | None = None,
+) -> str:
     """渲染 Presentation 模型为 PPT 文件。
 
     Args:
         model: Presentation 模型
         output_path: 输出 pptx 文件路径
+        source_pptx_path: 原始 PPTX 路径，若提供则在保存后尝试保留 chart 等 XML 级内容
 
     Returns:
         实际保存的文件路径字符串
@@ -38,4 +43,20 @@ def render_presentation(model: Presentation, output_path: str | Path) -> str:
         render_slide(prs, slide_model)
 
     prs.save(str(output_path))
+
+    # 若存在原始文件，执行 chart 保留后处理
+    if source_pptx_path is None and model.source_file:
+        inferred = Path("input") / model.source_file
+        if inferred.exists():
+            source_pptx_path = inferred
+
+    if source_pptx_path is not None:
+        try:
+            from ppt_transfor.renderer.chart_preserve import apply_chart_preservation
+
+            apply_chart_preservation(output_path, source_pptx_path, model)
+        except Exception:
+            # chart 保留失败不应影响主流程
+            pass
+
     return str(output_path)

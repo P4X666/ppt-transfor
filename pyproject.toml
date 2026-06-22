@@ -10,6 +10,7 @@ dependencies = [
     "rich>=15.0.0",
     "PyMuPDF>=1.24.0",
     "Pillow>=10.0.0",
+    "pywin32>=312",
 ]
 
 [build-system]

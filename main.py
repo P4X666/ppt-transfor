@@ -248,7 +248,7 @@ def roundtrip(pptx_path: Path, keep_intermediate: bool, visual: bool) -> None:
 
     # 2. JSON → 转换后 PPT
     console.print(f"[cyan]2. 渲染转换后 PPT:[/cyan] {converted_pptx_path}")
-    render_presentation(original_model, converted_pptx_path)
+    render_presentation(original_model, converted_pptx_path, source_pptx_path=pptx_path)
     console.print(f"   [green]PPT 已保存:[/green] {converted_pptx_path}")
 
     # 3. 转换后 PPT → JSON
@@ -310,7 +310,7 @@ def roundtrip_all(visual: bool) -> None:
 
             original_model = parse_presentation(pptx_path)
             _model_to_json_file(original_model, json_path)
-            render_presentation(original_model, converted_pptx_path)
+            render_presentation(original_model, converted_pptx_path, source_pptx_path=pptx_path)
             converted_model = parse_presentation(converted_pptx_path)
 
             original_dict = original_model.model_dump(exclude_none=True)

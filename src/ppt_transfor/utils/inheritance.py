@@ -234,9 +234,9 @@ def _extract_defRPr_from_xml(text_frame_element, prs=None) -> dict:
         prs: 所属 Presentation 对象（用于主题色固化，可选）
 
     Returns:
-        dict: { "font_size": int|None, "font_color": Color|None, "font_name": str|None }
+        dict: { "font_size": int|None, "font_color": Color|None, "font_name": str|None, "font_cap": str|None }
     """
-    props = {"font_size": None, "font_color": None, "font_name": None}
+    props = {"font_size": None, "font_color": None, "font_name": None, "font_cap": None}
     if text_frame_element is None:
         return props
 
@@ -267,6 +267,11 @@ def _extract_defRPr_from_xml(text_frame_element, prs=None) -> dict:
                 props["font_size"] = int(int(sz) * 127)
             except (ValueError, TypeError):
                 pass
+
+        # 大小写：cap 属性（all/small）
+        cap = def_rPr.get("cap")
+        if cap:
+            props["font_cap"] = cap.lower()
 
         # 颜色：<a:solidFill>/<a:srgbClr val="..."/>
         solid_fill = def_rPr.find(f"{{{NS_A}}}solidFill")
@@ -302,6 +307,55 @@ def _extract_defRPr_from_xml(text_frame_element, prs=None) -> dict:
     return props
 
 
+def extract_txbody_default_props(tx_body_element, prs=None) -> dict:
+    """从 <a:txBody>/<a:lstStyle> 提取默认文本属性。
+
+    shape 级别的默认文本样式定义在 txBody 的 lstStyle 中，
+    python-pptx 不会自动应用到 run.font，需手动解析并作为继承属性
+    传给 parse_paragraph / _parse_font。
+
+    当前先处理 <a:lvl1pPr>（大多数文本框只有一级），后续可按 para.level 扩展。
+
+    Args:
+        tx_body_element: <p:txBody> 元素（python-pptx TextFrame 的 _element）
+        prs: 所属 Presentation 对象（用于主题色固化）
+
+    Returns:
+        dict: {
+            "alignment": str|None,
+            "font_size": int|None,
+            "font_color": Color|None,
+            "font_name": str|None,
+            "font_cap": str|None,
+        }
+    """
+    props = {
+        "alignment": None,
+        "font_size": None,
+        "font_color": None,
+        "font_name": None,
+        "font_cap": None,
+    }
+    if tx_body_element is None:
+        return props
+
+    try:
+        # 对齐：从 lstStyle/lvl1pPr/pPr 提取
+        align = _extract_alignment_from_xml(tx_body_element)
+        if align is not None:
+            props["alignment"] = align
+
+        # 字体属性（字号/颜色/字体名/大小写）：从 lstStyle/lvl1pPr/defRPr 提取
+        font_props = _extract_defRPr_from_xml(tx_body_element, prs)
+        for key in ("font_size", "font_color", "font_name", "font_cap"):
+            if font_props.get(key) is not None:
+                props[key] = font_props[key]
+    except Exception:
+        pass
+
+    return props
+
+
 def _extract_alignment_from_xml(text_frame_element) -> Optional[str]:
     """从 txBody 的段落 pPr 提取对齐方式。
 
@@ -330,11 +384,12 @@ def _extract_alignment_from_xml(text_frame_element) -> Optional[str]:
         if lvl1_pPr is None:
             return None
 
-        pPr = lvl1_pPr.find(f"{{{NS_A}}}pPr")
-        if pPr is None:
-            return None
-
-        algn = pPr.get("algn")
+        # 对齐可能直接定义在 lvl1pPr@algn，也可能在子 pPr@algn
+        algn = lvl1_pPr.get("algn")
+        if not algn:
+            pPr = lvl1_pPr.find(f"{{{NS_A}}}pPr")
+            if pPr is not None:
+                algn = pPr.get("algn")
         if algn:
             # algn 值如 "ctr"/"l"/"r"/"just"，映射到 PP_ALIGN 名称
             algn_map = {
@@ -526,18 +581,29 @@ def _get_theme_element(presentation) -> Optional[object]:
 
     theme part 挂在 slide_master 上，通过 rels 查找 theme 关系获取。
     python-pptx 的 SlideMasterPart 没有 theme_part 属性，需遍历 rels。
+    若 master 未找到，回退到 presentation.part.rels 兜底。
     """
+    rels_sources = []
     try:
         master = presentation.slide_masters[0]
-        # 通过 rels 查找 theme 关系
-        for rel in master.part.rels.values():
-            if "theme" in rel.reltype.lower():
-                theme_part = rel.target_part
-                theme_element = etree.fromstring(theme_part.blob)
-                return theme_element
-        return None
+        rels_sources.append(master.part.rels)
     except Exception:
-        return None
+        pass
+    try:
+        rels_sources.append(presentation.part.rels)
+    except Exception:
+        pass
+
+    for rels in rels_sources:
+        try:
+            for rel in rels.values():
+                if "theme" in rel.reltype.lower():
+                    theme_part = rel.target_part
+                    theme_element = etree.fromstring(theme_part.blob)
+                    return theme_element
+        except Exception:
+            continue
+    return None
 
 
 def resolve_theme_color(color_format, presentation) -> Optional[Color]:

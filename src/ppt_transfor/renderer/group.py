@@ -62,12 +62,13 @@ def _apply_child_coords(group, model: Shape) -> None:
         ch_ext.set("cy", str(model.child_extent[1]))
 
 
-def render_group(slide, model: Shape):
+def render_group(slide, model: Shape, slide_bg_color=None):
     """渲染组合形状，返回 python-pptx GroupShape 对象。
 
     Args:
         slide: python-pptx Slide
         model: Shape 模型（shape_type == "group"）
+        slide_bg_color: 当前幻灯片背景色，传递给子形状
 
     Returns:
         GroupShape 对象
@@ -97,7 +98,7 @@ def render_group(slide, model: Shape):
 
     # 递归渲染子形状到组合内
     for child in model.children:
-        render_shape(group, child)
+        render_shape(group, child, slide_bg_color)
 
     # 回写子坐标系 chOff/chExt（关键：在添加子形状之后回写，
     # 避免 python-pptx 添加子形状时自动重算 chOff/chExt 覆盖原始值）

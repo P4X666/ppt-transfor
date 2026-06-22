@@ -58,7 +58,7 @@ def parse_color(color_format, prs=None) -> Optional[Color]:
             rgb_color = resolve_theme_color(color_format, prs)
             if rgb_color is not None:
                 return rgb_color
-        # 固化失败时降级保留主题色名（兜底）
+        # 固化失败时降级保留主题色名（兜底），避免颜色完全丢失导致默认黑色
         try:
             theme_color = color_format.theme_color
             return Color(

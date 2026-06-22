@@ -7,18 +7,135 @@
 
 from __future__ import annotations
 
+from os.path import normpath
+from pathlib import Path
+
+from lxml import etree
 from pptx.enum.shapes import MSO_SHAPE_TYPE
 
-from ppt_transfor.models.schema import Fill, Line, Shadow, Shape
+from ppt_transfor.models.schema import Color, Fill, GradientStop, Line, Shadow, Shape
 from ppt_transfor.utils.color import parse_color
 
+# XML 命名空间
+NS_A = "http://schemas.openxmlformats.org/drawingml/2006/main"
+NS_P = "http://schemas.openxmlformats.org/presentationml/2006/main"
+NS_R = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+NS_C = "http://schemas.openxmlformats.org/drawingml/2006/chart"
 
-def _parse_fill(fill, prs=None) -> Fill | None:
+
+def _parse_gradient_from_xml(shape_element, prs=None) -> tuple[str | None, float | None, list[GradientStop]]:
+    """从 <a:spPr> 下读取渐变填充的 stops、类型和角度。
+
+    Returns:
+        (gradient_type, gradient_angle, gradient_stops)
+    """
+    stops: list[GradientStop] = []
+    gradient_type = None
+    gradient_angle = None
+
+    if shape_element is None:
+        return gradient_type, gradient_angle, stops
+
+    try:
+        spPr = shape_element.find(f"{{{NS_P}}}spPr")
+        if spPr is None:
+            return gradient_type, gradient_angle, stops
+
+        gradFill = spPr.find(f"{{{NS_A}}}gradFill")
+        if gradFill is None:
+            return gradient_type, gradient_angle, stops
+
+        # 渐变类型与角度
+        lin = gradFill.find(f"{{{NS_A}}}lin")
+        if lin is not None:
+            gradient_type = "linear"
+            ang = lin.get("ang")
+            if ang is not None:
+                try:
+                    gradient_angle = float(ang)
+                except (ValueError, TypeError):
+                    pass
+
+        path = gradFill.find(f"{{{NS_A}}}path")
+        if path is not None:
+            gradient_type = path.get("path", "path")
+
+        rect = gradFill.find(f"{{{NS_A}}}rect")
+        if rect is not None:
+            gradient_type = "rect"
+
+        # stops
+        gsLst = gradFill.find(f"{{{NS_A}}}gsLst")
+        if gsLst is not None:
+            for gs in gsLst:
+                pos = gs.get("pos")
+                if pos is None:
+                    continue
+                try:
+                    position = int(pos) / 100000.0
+                except (ValueError, TypeError):
+                    continue
+
+                color = None
+                # srgbClr：优先直接子元素，其次兼容 <a:solidFill>/<a:srgbClr> 写法
+                srgb = gs.find(f"{{{NS_A}}}srgbClr")
+                if srgb is None:
+                    solid_fill = gs.find(f"{{{NS_A}}}solidFill")
+                    if solid_fill is not None:
+                        srgb = solid_fill.find(f"{{{NS_A}}}srgbClr")
+                if srgb is not None:
+                    val = srgb.get("val")
+                    if val:
+                        color = Color(type="rgb", value=val)
+
+                # schemeClr：固化为 RGB；同样兼容直接子元素或包在 solidFill 中
+                if color is None:
+                    scheme = gs.find(f"{{{NS_A}}}schemeClr")
+                    if scheme is None:
+                        solid_fill = gs.find(f"{{{NS_A}}}solidFill")
+                        if solid_fill is not None:
+                            scheme = solid_fill.find(f"{{{NS_A}}}schemeClr")
+                    if scheme is not None:
+                        val = scheme.get("val")
+                        if val:
+                            from ppt_transfor.utils.inheritance import _resolve_schemeclr_to_rgb
+
+                            rgb_value = _resolve_schemeclr_to_rgb(val, prs)
+                            if rgb_value is not None:
+                                color = Color(type="rgb", value=rgb_value)
+                            else:
+                                color = Color(type="theme", value=val)
+
+                if color is not None:
+                    stops.append(GradientStop(position=position, color=color))
+    except Exception:
+        pass
+
+    return gradient_type, gradient_angle, stops
+
+
+def _parse_fill(fill, shape_element=None, prs=None) -> Fill | None:
     """解析填充。
 
-    None（继承）与 BACKGROUND（显式无填充）统一返回 None，
-    避免往返时因 add_shape 默认填充行为差异产生噪声。
+    优先读取 XML：若 <a:spPr> 下显式存在 <a:noFill/>，则视为透明填充。
+    python-pptx 对 noFill 形状有时会报告 fill.type=BACKGROUND，
+    直接按 XML 判断可避免透明文本框被误判为背景填充。
+
+    None（继承）返回 None，避免往返时因 add_shape 默认填充行为差异产生噪声。
     """
+    # 优先检查 XML：显式 noFill 表示透明
+    if shape_element is not None:
+        try:
+            spPr = shape_element.find("{http://schemas.openxmlformats.org/presentationml/2006/main}spPr")
+            if spPr is not None:
+                no_fill = spPr.find("{http://schemas.openxmlformats.org/drawingml/2006/main}noFill")
+                if no_fill is not None:
+                    model = Fill()
+                    model.type = "none"
+                    return model
+        except Exception:
+            pass
+
     try:
         fill_type = fill.type
     except Exception:
@@ -30,21 +147,34 @@ def _parse_fill(fill, prs=None) -> Fill | None:
     # fill_type 是 MSO_FILL 枚举
     type_name = fill_type.name if hasattr(fill_type, "name") else str(fill_type)
 
-    # BACKGROUND（显式无填充）与继承统一，往返一致
+    # BACKGROUND 表示“跟随幻灯片背景”，需保留以正确回写
     if type_name == "BACKGROUND":
-        return None
+        model = Fill()
+        model.type = "background"
+        return model
 
     model = Fill()
     if type_name == "SOLID":
-        model.type = "solid"
         try:
             color = parse_color(fill.fore_color, prs)
-            if color is not None:
-                model.color = color
         except Exception:
-            pass
+            color = None
+        if color is not None:
+            model.type = "solid"
+            model.color = color
+        else:
+            # 无法解析颜色时降级为无填充，避免渲染为默认黑色
+            model.type = "none"
+        return model
     elif type_name == "GRADIENT":
         model.type = "gradient"
+        grad_type, grad_angle, grad_stops = _parse_gradient_from_xml(shape_element, prs)
+        if grad_type is not None:
+            model.gradient_type = grad_type
+        if grad_angle is not None:
+            model.gradient_angle = grad_angle
+        if grad_stops:
+            model.gradient_stops = grad_stops
     elif type_name == "PATTERNED":
         model.type = "pattern"
     elif type_name == "PICTURE":
@@ -137,7 +267,7 @@ def _parse_common_props(shape, prs=None) -> dict:
 
     # 填充
     try:
-        fill = _parse_fill(shape.fill, prs)
+        fill = _parse_fill(shape.fill, getattr(shape, "_element", None), prs)
         if fill is not None:
             props["fill"] = fill
     except Exception:
@@ -167,6 +297,59 @@ def _is_placeholder(shape) -> bool:
         return False
 
 
+def _placeholder_default_alignment(shape) -> str:
+    """根据 placeholder 类型返回默认对齐方式。
+
+    标题/副标题类占位符在 PowerPoint 中默认居中对齐；
+    正文/其他占位符默认左对齐。
+    """
+    try:
+        ph_type = shape.placeholder_format.type
+        if ph_type is not None:
+            type_name = ph_type.name if hasattr(ph_type, "name") else str(ph_type)
+            if type_name in ("TITLE", "CENTER_TITLE", "SUBTITLE"):
+                return "CENTER"
+    except Exception:
+        pass
+    return "LEFT"
+
+
+def _parse_chart_part(shape, slide) -> str | None:
+    """从 slide part 的 relationships 中定位 chart 对应的 part 路径。
+
+    返回标准化路径，例如 "ppt/charts/chart1.xml"。
+    """
+    if slide is None:
+        return None
+
+    try:
+        graphic_data = shape._element.find(f".//{{{NS_A}}}graphicData")
+        if graphic_data is None:
+            return None
+
+        chart_el = graphic_data.find(f"{{{NS_C}}}chart")
+        if chart_el is None:
+            return None
+
+        chart_rid = chart_el.get(f"{{{NS_R}}}id")
+        if not chart_rid:
+            return None
+
+        rel = slide.part.rels.get(chart_rid)
+        if rel is None:
+            return None
+
+        target = rel.target_ref
+        if not target:
+            return None
+
+        # target_ref 相对于 slide 文件（ppt/slides/）
+        part_path = Path("ppt/slides") / target
+        return normpath(str(part_path)).replace("\\", "/")
+    except Exception:
+        return None
+
+
 def parse_shape(shape, slide=None, prs=None) -> Shape:
     """解析单个形状，按类型分发到对应解析器。
 
@@ -191,6 +374,9 @@ def parse_shape(shape, slide=None, prs=None) -> Shape:
     if _is_placeholder(shape) and slide is not None:
         from ppt_transfor.utils.inheritance import resolve_placeholder_props
         inherited_props = resolve_placeholder_props(shape, slide, prs)
+        # placeholder 类型决定默认对齐：标题类默认居中，正文类默认左对齐
+        if inherited_props.get("alignment") is None:
+            inherited_props["alignment"] = _placeholder_default_alignment(shape)
 
     # 类型判断与分发
     # 优先用 has_table / has_text_frame 等方法判断，更可靠
@@ -229,6 +415,18 @@ def parse_shape(shape, slide=None, prs=None) -> Shape:
         if shape.has_text_frame:
             from ppt_transfor.parser.text import parse_text_frame
             model.text = parse_text_frame(shape.text_frame, prs, inherited_props)
+        return model
+
+    if st == MSO_SHAPE_TYPE.CHART:
+        model.shape_type = "chart"
+        try:
+            model.chart_xml = etree.tostring(shape._element, encoding="unicode")
+        except Exception:
+            pass
+        try:
+            model.chart_part = _parse_chart_part(shape, slide)
+        except Exception:
+            pass
         return model
 
     if st in (MSO_SHAPE_TYPE.LINE, MSO_SHAPE_TYPE.FREEFORM) and not shape.has_text_frame:

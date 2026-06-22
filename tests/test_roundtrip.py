@@ -39,9 +39,9 @@ def test_roundtrip(pptx_path: Path, tmp_path: Path) -> None:
     # 1. 原始 PPT → 模型
     original_model = parse_presentation(pptx_path)
 
-    # 2. 模型 → 转换后 PPT
+    # 2. 模型 → 转换后 PPT（传入原始路径以触发 chart 保留等后处理）
     converted_pptx = tmp_path / f"{pptx_path.stem}_converted.pptx"
-    render_presentation(original_model, converted_pptx)
+    render_presentation(original_model, converted_pptx, source_pptx_path=pptx_path)
 
     # 3. 转换后 PPT → 模型
     converted_model = parse_presentation(converted_pptx)

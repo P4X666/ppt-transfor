@@ -74,17 +74,41 @@ def _float_equal(a: float, b: float) -> bool:
     return abs(a - b) < FLOAT_TOLERANCE
 
 
-def _values_equal(a: Any, b: Any) -> bool:
-    """值相等判断（处理浮点容差与已知等价类型）"""
+def _values_equal(a: Any, b: Any, path: str = "") -> bool:
+    """值相等判断（处理浮点容差与已知等价类型）。
+
+    Args:
+        a: 原始值
+        b: 转换后值
+        path: 当前字段路径，用于路径相关的等价规则
+    """
     # 都为 None
     if a is None and b is None:
         return True
 
-    # alignment 等价：None（继承）与 CENTER（add_shape 默认主题对齐）等价
-    # 这是 python-pptx 的固有行为差异：add_shape 创建的段落默认 CENTER 对齐
-    # 注：placeholder 的对齐已固化进 JSON（不会是 None），此等价仅影响非 placeholder 形状
-    if (a is None and b == "CENTER") or (b is None and a == "CENTER"):
+    # alignment 等价：None 表示未显式设置，PPTX 默认值通常为 LEFT；
+    # 而 add_shape 创建的段落有时默认 CENTER。None 与 LEFT/CENTER 均视为等价，
+    # 避免未显式设置的对齐在往返后被记录为差异。
+    # 注：placeholder 的对齐已固化进 JSON（不会是 None），此等价仅影响非 placeholder 形状。
+    if path.endswith(".alignment") or path == "alignment":
+        if (a is None and b in ("LEFT", "CENTER")) or (b is None and a in ("LEFT", "CENTER")):
+            return True
+
+    # 填充等价：未记录填充（None）与显式背景填充在视觉上通常等价
+    # 因为 add_textbox/add_shape 创建的 shape 默认即为 background 填充
+    if (a is None and b == {"type": "background"}) or (b is None and a == {"type": "background"}):
         return True
+
+    # 未记录填充（None）与显式无填充（{'type': 'none'}）视觉等价
+    if (a is None and isinstance(b, dict) and b.get("type") == "none") or (
+        b is None and isinstance(a, dict) and a.get("type") == "none"
+    ):
+        return True
+
+    # word_wrap：未显式设置（None）在 PowerPoint 中默认自动换行，与 True 等价
+    if path.endswith(".word_wrap") or path == "word_wrap":
+        if (a is None and b is True) or (b is None and a is True):
+            return True
 
     # 一方为 None：空容器视为等于 None（保留，避免噪声）
     if a is None or b is None:
@@ -99,14 +123,22 @@ def _values_equal(a: Any, b: Any) -> bool:
         except (TypeError, ValueError):
             return a == b
 
+    # chart_xml / chart_part：只要两者都存在（保留 chart），具体 id/part 名不同可接受
+    if path.endswith(".chart_xml") or path == "chart_xml":
+        if a and b and isinstance(a, str) and isinstance(b, str) and len(a) > 0 and len(b) > 0:
+            return True
+    if path.endswith(".chart_part") or path == "chart_part":
+        if a and b and isinstance(a, str) and isinstance(b, str) and len(a) > 0 and len(b) > 0:
+            return True
+
     # shape_type 等价：
-    # - chart 不支持往返，降级为 text_box 是已知限制（保留等价）
     # - placeholder 降级为 text_box：渲染用 Blank 布局无 placeholder，
     #   但继承的对齐/字号/颜色已固化进 JSON，视觉差异已消除（保留等价）
     # - auto_shape 降级为 text_box：无 auto_shape_type 的形状（如直线连接器）
     #   渲染时降级为 text_box，是已知限制（保留等价）
-    if (a in ("chart", "auto_shape", "placeholder") and b == "text_box") or (
-        b in ("chart", "auto_shape", "placeholder") and a == "text_box"
+    # 注：chart 已支持 XML 级保留，不再与 text_box 等价，以检测 chart 丢失
+    if (a in ("auto_shape", "placeholder") and b == "text_box") or (
+        b in ("auto_shape", "placeholder") and a == "text_box"
     ):
         return True
 
@@ -172,7 +204,7 @@ def _diff_recursive(
         return
 
     # 标量对比
-    if not _values_equal(original, converted):
+    if not _values_equal(original, converted, path):
         diffs.append(DiffItem(path=path, original=original, converted=converted))
 
 

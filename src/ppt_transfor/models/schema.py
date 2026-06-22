@@ -31,6 +31,7 @@ class Font(BaseModel):
     bold: Optional[bool] = None
     italic: Optional[bool] = None
     underline: Optional[bool] = None
+    cap: Optional[str] = None  # "all" 表示全大写，"small" 表示小型大写
     color: Optional[Color] = None
 
 
@@ -57,14 +58,28 @@ class Paragraph(BaseModel):
 
 
 class Text(BaseModel):
-    """文本框内容：含自动换行、自适应、垂直对齐、段落列表。"""
+    """文本框内容：含自动换行、自适应、垂直对齐、边距、段落列表。"""
 
     model_config = ConfigDict(extra="allow")
 
     word_wrap: Optional[bool] = None
     auto_size: Optional[str] = None
     vertical_anchor: Optional[str] = None
+    # 文本框内部边距（EMU），来自 <a:bodyPr> 的 lIns/tIns/rIns/bIns
+    margin_left: Optional[int] = None
+    margin_top: Optional[int] = None
+    margin_right: Optional[int] = None
+    margin_bottom: Optional[int] = None
     paragraphs: list[Paragraph] = []
+
+
+class GradientStop(BaseModel):
+    """渐变停止点：位置 0.0~1.0 与对应颜色。"""
+
+    model_config = ConfigDict(extra="allow")
+
+    position: float
+    color: Color
 
 
 class Fill(BaseModel):
@@ -74,6 +89,10 @@ class Fill(BaseModel):
 
     type: str = "none"
     color: Optional[Color] = None
+    # 渐变相关属性
+    gradient_type: Optional[str] = None  # linear / radial / rect / path
+    gradient_angle: Optional[float] = None  # 线性渐变角度（EMU，如 5400000）
+    gradient_stops: list[GradientStop] = []
 
 
 class Line(BaseModel):
@@ -159,6 +178,11 @@ class Shape(BaseModel):
 
     # 表格特有
     table: Optional[Table] = None
+
+    # 图表特有：保留原始 <p:graphicFrame> XML，渲染时可选转为图片或 XML 级保留
+    chart_xml: Optional[str] = None
+    # 原始 chart part 路径，例如 "ppt/charts/chart1.xml"
+    chart_part: Optional[str] = None
 
     # 组合特有
     children: list[Shape] = []
