@@ -44,13 +44,22 @@ def render_presentation(
 
     prs.save(str(output_path))
 
-    # 若存在原始文件，执行 chart 保留后处理
+    # 若存在原始文件，先执行主题保留（替换 theme1.xml 和 tableStyles.xml），
+    # 再执行 chart 保留后处理
     if source_pptx_path is None and model.source_file:
         inferred = Path("input") / model.source_file
         if inferred.exists():
             source_pptx_path = inferred
 
     if source_pptx_path is not None:
+        try:
+            from ppt_transfor.renderer.theme_preserve import apply_theme_preservation
+
+            apply_theme_preservation(output_path, source_pptx_path)
+        except Exception:
+            # 主题保留失败不应影响主流程
+            pass
+
         try:
             from ppt_transfor.renderer.chart_preserve import apply_chart_preservation
 

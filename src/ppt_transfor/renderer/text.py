@@ -77,7 +77,19 @@ def _apply_auto_size(tf, auto_size: str | None) -> None:
 
 
 def _apply_font(font_obj, font: Font) -> None:
-    """回写字体属性"""
+    """回写字体属性
+
+    python-pptx 只暴露 latin 字体（font.name），ea/cs/sym 需直接操作 rPr XML：
+    <a:rPr>
+      <a:latin typeface="..."/>   # font.name
+      <a:ea typeface="..."/>      # font_ea（东亚字体）
+      <a:cs typeface="..."/>      # font_cs（复杂脚本）
+      <a:sym typeface="..."/>     # font_sym（符号字体）
+    </a:rPr>
+
+    缺失 ea/cs/sym 会导致 PowerPoint 字体回退行为异常，
+    如某些字符用默认字体渲染、大小写显示异常等。
+    """
     if font.name is not None:
         font_obj.name = font.name
     if font.size is not None:
@@ -99,6 +111,48 @@ def _apply_font(font_obj, font: Font) -> None:
             apply_color(font_obj.color, font.color)
         except Exception:
             pass
+
+    # ea/cs/sym 字体：python-pptx 不暴露 API，直接写 rPr XML 子元素
+    # OOXML schema 要求 rPr 子元素顺序：
+    #   ln → fill → effects → highlight → uLnTx/uLn → uFillTx/uFill
+    #   → latin → ea → cs → sym → hlinkClick → hlinkMouseOver → rtl → extLst
+    # SubElement 默认追加到末尾会破坏顺序（hlinkClick 之后），Office 可能判定损坏。
+    # 这里在 latin 之后按序插入 ea/cs/sym，保证 schema 顺序正确。
+    try:
+        rPr = font_obj._element
+    except Exception:
+        rPr = None
+    if rPr is not None:
+        from lxml import etree as _etree
+
+        latin = rPr.find(f"{{{NS_A}}}latin")
+        for tag, key in (
+            ("ea", "font_ea"),
+            ("cs", "font_cs"),
+            ("sym", "font_sym"),
+        ):
+            typeface = getattr(font, key, None)
+            if not typeface:
+                continue
+            existing = rPr.find(f"{{{NS_A}}}{tag}")
+            if existing is not None:
+                existing.set("typeface", typeface)
+                continue
+            # 新建子元素并按 schema 顺序插入到 latin 之后
+            elem = _etree.SubElement(rPr, f"{{{NS_A}}}{tag}")
+            elem.set("typeface", typeface)
+            # SubElement 默认追加到末尾，需移动到 latin 之后
+            # 关键：无论是否移动，都必须更新 latin 引用为当前元素，
+            # 否则后续元素仍以原 latin 为锚点插入，会插到当前元素之前，破坏 ea→cs→sym 顺序
+            if latin is not None:
+                children = list(rPr)
+                latin_idx = children.index(latin)
+                cur_idx = children.index(elem)
+                if cur_idx > latin_idx + 1:
+                    rPr.remove(elem)
+                    rPr.insert(latin_idx + 1, elem)
+                # 更新锚点为当前元素，保证下一个元素插入到当前元素之后
+                latin = elem
 
 
 def _render_run(para, run_model: Run) -> None:

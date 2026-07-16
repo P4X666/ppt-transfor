@@ -146,65 +146,129 @@ def _ensure_text_visibility(slide_model: Slide) -> None:
         _ensure_shape_text_visibility(slide_model, shape_model, CONTRAST_THRESHOLD)
 
 
-def _parse_inherited_pictures(slide, prs=None) -> list[Shape]:
-    """解析布局和母版上的图片形状，返回 Shape 列表。
+def _shape_dedup_key(model: Shape) -> str:
+    """生成形状去重键。
 
-    转换后 PPT 使用 Blank 布局，布局/母版继承的图片会丢失。
-    此函数将布局/母版的 <p:pic> 提取为幻灯片级图片形状，保证视觉保真。
-    渲染顺序：母版图片在底层（先渲染），布局图片在上层（后渲染）。
+    图片用完整 base64 的 MD5 去重（不同图片 PNG header 相同但数据不同，
+    不能用前 N 字符判断）；非图片形状用类型+位置+填充组合键。
     """
-    pictures: list[Shape] = []
-    seen_blobs: set[str] = set()
+    if model.shape_type == "picture" and model.data_base64:
+        import hashlib
 
-    # 收集容器：布局在前，母版在后
-    containers = []
+        return f"pic:{hashlib.md5(model.data_base64.encode()).hexdigest()}"
+    # 非图片形状：用类型+位置+填充组合去重
+    fill_str = ""
+    if model.fill and model.fill.color and model.fill.color.value:
+        fill_str = model.fill.color.value
+    return (
+        f"{model.shape_type}:"
+        f"{model.left},{model.top},{model.width},{model.height}:"
+        f"{fill_str}"
+    )
+
+
+def _collect_non_placeholder_shapes(container, prs=None) -> list:
+    """收集 container 中所有非 placeholder 形状，返回原始 shape 对象列表。"""
+    result = []
     try:
-        containers.append(slide.slide_layout)
+        for shape in container.shapes:
+            try:
+                st = shape.shape_type
+                if st == MSO_SHAPE_TYPE.PLACEHOLDER:
+                    continue
+            except Exception:
+                continue
+            result.append(shape)
     except Exception:
         pass
-    try:
-        containers.append(slide.slide_layout.slide_master)
-    except Exception:
-        pass
+    return result
 
-    # 反向遍历：母版图片先加入列表（渲染时在底层），布局图片后加入（在上层）
-    for container in reversed(containers):
+
+def _has_fullscreen_picture(slide, prs=None) -> bool:
+    """检查 slide 自己是否有覆盖整个幻灯片区域的图片。
+
+    若 slide 有全屏 Image，PowerPoint 渲染时 slide 层的 Image 会覆盖 master 层，
+    master 的装饰 shapes 不可见，无需合并 master shapes。
+    典型场景：card.pptx slide[0] 有全屏透明 Image，master Rectangle 不应合并，
+    否则透过透明 Image 看到 master Rectangle（灰色），而非 slide 背景（黑色）。
+    """
+    if prs is None:
+        return False
+    try:
+        slide_width = prs.slide_width
+        slide_height = prs.slide_height
+    except Exception:
+        return False
+
+    for shape in slide.shapes:
         try:
-            for shape in container.shapes:
-                try:
-                    if shape.shape_type != MSO_SHAPE_TYPE.PICTURE:
-                        continue
-                except Exception:
-                    continue
-
-                from ppt_transfor.parser.image import parse_picture
-
-                pic_fields = parse_picture(shape)
-                if not pic_fields.get("data_base64"):
-                    continue
-
-                # 去重：同一图片在母版和布局都有时只保留一个
-                blob_key = pic_fields["data_base64"][:100]
-                if blob_key in seen_blobs:
-                    continue
-                seen_blobs.add(blob_key)
-
-                model = Shape(
-                    shape_id=str(getattr(shape, "shape_id", "") or ""),
-                    name=getattr(shape, "name", None),
-                    shape_type="picture",
-                    left=int(shape.left) if shape.left is not None else None,
-                    top=int(shape.top) if shape.top is not None else None,
-                    width=int(shape.width) if shape.width is not None else None,
-                    height=int(shape.height) if shape.height is not None else None,
-                )
-                for k, v in pic_fields.items():
-                    setattr(model, k, v)
-                pictures.append(model)
+            if shape.shape_type != MSO_SHAPE_TYPE.PICTURE:
+                continue
+            left = shape.left or 0
+            top = shape.top or 0
+            width = shape.width or 0
+            height = shape.height or 0
+            # 全屏条件：左上角接近原点，宽高覆盖 95%/90% 以上
+            if left <= 0 and top <= slide_height * 0.1:
+                if width >= slide_width * 0.95 and height >= slide_height * 0.90:
+                    return True
         except Exception:
-            pass
+            continue
+    return False
 
-    return pictures
+
+def _parse_inherited_pictures(slide, prs=None) -> list[Shape]:
+    """解析布局/母版上继承的非 placeholder 形状，返回 Shape 列表。
+
+    转换后 PPT 使用 Blank 布局，布局/母版继承的形状会丢失。
+    此函数将非 placeholder 形状（图片/自选图形等）提取为幻灯片级形状，
+    保证视觉保真。
+
+    合并策略（模拟 OOXML 渲染层级 master < layout < slide）：
+    - 若 layout 有非 placeholder shapes，说明该 layout 已定义自己的装饰
+      （如全屏 Image 覆盖了 master 的灰色 Rectangle），只合并 layout 的 shapes。
+    - 若 layout 无非 placeholder shapes 但 slide 自己有全屏 Image，
+      slide 层的 Image 会覆盖 master 层，master 装饰不可见，不合并 master。
+    - 若 layout 无非 placeholder shapes 且 slide 无全屏 Image，
+      说明该 layout 依赖 master 的装饰，需合并 master 的 shapes（如左侧灰色 Rectangle）。
+    """
+    from ppt_transfor.parser.shape import parse_shape
+
+    inherited: list[Shape] = []
+    seen_keys: set[str] = set()
+
+    try:
+        layout = slide.slide_layout
+    except Exception:
+        return inherited
+
+    # 优先收集 layout 的非 placeholder shapes
+    layout_shapes = _collect_non_placeholder_shapes(layout, prs)
+
+    if layout_shapes:
+        # layout 有装饰 shapes → 只合并 layout（layout 已覆盖 master 的装饰）
+        containers = [layout]
+    elif _has_fullscreen_picture(slide, prs):
+        # slide 有全屏 Image → slide 层覆盖 master 层，master 装饰不可见，不合并
+        containers = []
+    else:
+        # layout 无装饰 shapes 且 slide 无全屏 Image → 合并 master（layout 依赖 master 的装饰）
+        try:
+            master = layout.slide_master
+            containers = [master]
+        except Exception:
+            containers = []
+
+    for container in containers:
+        for shape in _collect_non_placeholder_shapes(container, prs):
+            model = parse_shape(shape, None, prs)
+            key = _shape_dedup_key(model)
+            if key in seen_keys:
+                continue
+            seen_keys.add(key)
+            inherited.append(model)
+
+    return inherited
 
 
 def parse_slide(slide, index: int, prs=None) -> Slide:

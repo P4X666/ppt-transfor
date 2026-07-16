@@ -106,6 +106,9 @@ class Line(BaseModel):
     # 箭头线端点类型（如 "triangle"），对应 OpenXML <a:headEnd>/<a:tailEnd> 的 type 属性
     head_arrow_type: Optional[str] = None
     tail_arrow_type: Optional[str] = None
+    # 线条无填充标记：原始 XML 中 <a:ln> 有宽度但无 solidFill 子元素
+    # 渲染时需显式设置 noFill，避免继承 p:style 或主题默认色（蓝色）
+    no_fill: bool = False
 
 
 class Shadow(BaseModel):
@@ -127,6 +130,17 @@ class Crop(BaseModel):
     bottom: float = 0.0
 
 
+class CellBorder(BaseModel):
+    """单元格边框：保留原始边框信息（宽度/颜色/无填充）。"""
+
+    model_config = ConfigDict(extra="allow")
+
+    width: Optional[int] = None
+    color: Optional[Color] = None
+    # 无填充标记：原始 XML 中 <a:lnL>/<a:lnR> 等有 width 但无 solidFill
+    no_fill: bool = False
+
+
 class TableCell(BaseModel):
     """表格单元格。"""
 
@@ -136,6 +150,11 @@ class TableCell(BaseModel):
     fill: Optional[Fill] = None
     span_x: int = 1
     span_y: int = 1
+    # 单元格四边边框，对应 <a:tcPr> 下的 lnL/lnR/lnT/lnB
+    border_left: Optional[CellBorder] = None
+    border_right: Optional[CellBorder] = None
+    border_top: Optional[CellBorder] = None
+    border_bottom: Optional[CellBorder] = None
 
 
 class Table(BaseModel):
@@ -147,6 +166,14 @@ class Table(BaseModel):
     cols: int
     cells: list[list[TableCell]] = []
     first_row_header: bool = False
+    # 表格样式 ID（OOXML tableStyleId GUID），保留原始样式引用
+    style_id: Optional[str] = None
+    # tblPr 属性：特殊行列样式标记
+    first_col: bool = False
+    last_row: bool = False
+    band_row: bool = False
+    # 列宽（EMU 整数），保留原始列宽避免 add_table 默认均分
+    col_widths: list[int] = []
 
 
 class Shape(BaseModel):
@@ -166,6 +193,14 @@ class Shape(BaseModel):
     fill: Optional[Fill] = None
     line: Optional[Line] = None
     shadow: Optional[Shadow] = None
+
+    # 是否有 <p:style> 元素（主题样式引用）
+    # add_shape 会自动创建 p:style，但原始 PPT 可能没有
+    # 渲染时若 has_style=False，移除 add_shape 创建的 p:style，避免主题边框干扰
+    has_style: bool = False
+    # p:style 的完整 XML（若原始 PPT 有 p:style），用于回写
+    # add_textbox 不创建 p:style，需要从原始 PPT 复制
+    style_xml: Optional[str] = None
 
     # 文本框/自选图形/占位符共有
     text: Optional[Text] = None

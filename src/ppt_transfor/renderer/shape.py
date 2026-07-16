@@ -149,11 +149,34 @@ def _apply_line(line, line_model: Line | None) -> None:
             line.width = Emu(line_model.width)
         except Exception:
             pass
-    if line_model.color is not None:
+
+    # 无填充线条：显式设置 <a:noFill/>，避免继承 p:style 或主题默认色（蓝色）
+    # 必须在 width 设置之后执行，确保 <a:ln> 已存在
+    if line_model.no_fill:
+        try:
+            from lxml import etree
+
+            ln_el = line._ln
+            if ln_el is not None:
+                # 移除现有 solidFill
+                existing = ln_el.find(qn("a:solidFill"))
+                if existing is not None:
+                    ln_el.remove(existing)
+                # noFill 插入到第一个位置，确保 schema 顺序正确
+                # OpenXML 规范要求 <a:ln> 子元素顺序：noFill/solidFill → dash → round/bevel/miter → headEnd → tailEnd
+                no_fill_el = ln_el.find(qn("a:noFill"))
+                if no_fill_el is not None:
+                    ln_el.remove(no_fill_el)
+                no_fill_el = etree.Element(qn("a:noFill"))
+                ln_el.insert(0, no_fill_el)
+        except Exception:
+            pass
+    elif line_model.color is not None:
         try:
             apply_color(line.color, line_model.color)
         except Exception:
             pass
+
     if line_model.dash is not None:
         try:
             from pptx.enum.dml import MSO_LINE_DASH_STYLE
@@ -237,6 +260,37 @@ def _apply_common_props(shape, model: Shape, slide_bg_color: Color | None = None
     else:
         try:
             shape.shadow.inherit = False
+        except Exception:
+            pass
+
+    # 移除 add_shape/add_connector 自动创建的 <p:style> 元素（原始 PPT 没有）
+    # p:style 的 lnRef 会引用主题线条样式，可能导致渲染器显示主题边框
+    # 即使 spPr 的 <a:ln> 有 noFill，某些渲染器仍可能因 p:style 存在而回退到主题边框
+    # 注意：add_textbox 不创建 p:style，所以 text_box 不受影响
+    if not getattr(model, "has_style", False):
+        try:
+            p_style = shape._element.find(qn("p:style"))
+            if p_style is not None:
+                shape._element.remove(p_style)
+        except Exception:
+            pass
+    elif getattr(model, "style_xml", None):
+        # 原始 PPT 有 p:style，但 add_textbox 不创建 p:style，需要从原始 PPT 复制
+        try:
+            from lxml import etree
+            # 移除现有的 p:style（如果有）
+            existing = shape._element.find(qn("p:style"))
+            if existing is not None:
+                shape._element.remove(existing)
+            # 解析并插入 p:style
+            new_style = etree.fromstring(model.style_xml)
+            # OOXML schema 要求 sp 子元素顺序: nvSpPr → spPr → style → txBody
+            # style 必须在 spPr 之后（addprevious 会导致 style 在 spPr 之前，违反 schema）
+            spPr = shape._element.find(qn("p:spPr"))
+            if spPr is not None:
+                spPr.addnext(new_style)
+            else:
+                shape._element.append(new_style)
         except Exception:
             pass
 

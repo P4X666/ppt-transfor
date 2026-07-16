@@ -100,7 +100,8 @@ def _parse_gradient_from_xml(shape_element, prs=None) -> tuple[str | None, float
                         if val:
                             from ppt_transfor.utils.inheritance import _resolve_schemeclr_to_rgb
 
-                            rgb_value = _resolve_schemeclr_to_rgb(val, prs)
+                            # 传入 scheme 元素以应用 lumOff/lumMod 等修饰符
+                            rgb_value = _resolve_schemeclr_to_rgb(val, prs, scheme)
                             if rgb_value is not None:
                                 color = Color(type="rgb", value=rgb_value)
                             else:
@@ -190,6 +191,22 @@ def _parse_line(line, prs=None) -> Line | None:
     model = Line()
 
     has_value = False
+
+    # 先获取 <a:ln> 原始状态，避免后续访问 line.color 时 python-pptx 自动添加 <a:solidFill/>
+    # 污染 XML 导致 no_fill 检测失败
+    ln_el = None
+    orig_has_solid_fill = False
+    orig_has_no_fill = False
+    try:
+        from pptx.oxml.ns import qn
+
+        ln_el = line._ln
+        if ln_el is not None:
+            orig_has_solid_fill = ln_el.find(qn("a:solidFill")) is not None
+            orig_has_no_fill = ln_el.find(qn("a:noFill")) is not None
+    except Exception:
+        pass
+
     try:
         if line.width is not None:
             width_val = int(line.width)
@@ -216,11 +233,17 @@ def _parse_line(line, prs=None) -> Line | None:
     except Exception:
         pass
 
+    # 检测无填充线条：<a:ln> 有 width 但无 solidFill（无论是否有 noFill）
+    # 渲染时需显式设置 noFill，避免继承 p:style 或主题默认色（蓝色）
+    # 使用最初获取的原始状态，避免 line.color 访问污染
+    if ln_el is not None and model.width is not None:
+        if not orig_has_solid_fill:
+            # 无 solidFill（可能有 noFill 也可能没有）→ 标记为 no_fill
+            model.no_fill = True
+            has_value = True
+
     # 箭头线端点：从 <a:ln> 的 <a:headEnd>/<a:tailEnd> 读取 type 属性
     try:
-        from pptx.oxml.ns import qn
-
-        ln_el = line._ln
         if ln_el is not None:
             head_end = ln_el.find(qn("a:headEnd"))
             if head_end is not None:
@@ -318,23 +341,6 @@ def _is_placeholder(shape) -> bool:
         return False
 
 
-def _placeholder_default_alignment(shape) -> str:
-    """根据 placeholder 类型返回默认对齐方式。
-
-    标题/副标题类占位符在 PowerPoint 中默认居中对齐；
-    正文/其他占位符默认左对齐。
-    """
-    try:
-        ph_type = shape.placeholder_format.type
-        if ph_type is not None:
-            type_name = ph_type.name if hasattr(ph_type, "name") else str(ph_type)
-            if type_name in ("TITLE", "CENTER_TITLE", "SUBTITLE"):
-                return "CENTER"
-    except Exception:
-        pass
-    return "LEFT"
-
-
 def _parse_chart_part(shape, slide) -> str | None:
     """从 slide part 的 relationships 中定位 chart 对应的 part 路径。
 
@@ -385,6 +391,20 @@ def parse_shape(shape, slide=None, prs=None) -> Shape:
         name=getattr(shape, "name", None),
     )
 
+    # 检查是否有 <p:style> 元素（主题样式引用）
+    # add_shape 会自动创建 p:style，但原始 PPT 可能没有
+    try:
+        p_style = shape._element.find(f"{{{NS_P}}}style")
+        if p_style is not None:
+            model.has_style = True
+            # 记录 p:style 的完整 XML，用于回写
+            # add_textbox 不创建 p:style，需要从原始 PPT 复制
+            model.style_xml = etree.tostring(p_style, encoding="unicode")
+        else:
+            model.has_style = False
+    except Exception:
+        model.has_style = False
+
     # 通用属性
     props = _parse_common_props(shape, prs)
     for k, v in props.items():
@@ -395,9 +415,11 @@ def parse_shape(shape, slide=None, prs=None) -> Shape:
     if _is_placeholder(shape) and slide is not None:
         from ppt_transfor.utils.inheritance import resolve_placeholder_props
         inherited_props = resolve_placeholder_props(shape, slide, prs)
-        # placeholder 类型决定默认对齐：标题类默认居中，正文类默认左对齐
-        if inherited_props.get("alignment") is None:
-            inherited_props["alignment"] = _placeholder_default_alignment(shape)
+        # 不对齐方式做 placeholder 类型推断（如假设 TITLE 默认居中）。
+        # OOXML 规范中 <a:pPr> 缺失 algn 属性时默认左对齐，
+        # 若继承链（slide→layout→master）均未显式设置对齐，
+        # 应保持 None，由渲染层 default_alignment="LEFT" 兜底，
+        # 避免把左对齐的 title 错误渲染为居中。
 
     # 类型判断与分发
     # 优先用 has_table / has_text_frame 等方法判断，更可靠

@@ -124,12 +124,28 @@ def _extract_para_default_props(para, prs=None) -> dict:
         prs: Presentation 对象（用于主题色固化）
 
     Returns:
-        dict: {"font_size": ..., "font_color": Color, "font_name": ..., "font_cap": ...}
+        dict: {
+            "font_size": ...,
+            "font_color": Color,
+            "font_name": ...,      # latin 字体名
+            "font_cap": ...,
+            "font_ea": ...,        # 东亚字体名
+            "font_cs": ...,        # 复杂脚本字体名
+            "font_sym": ...,       # 符号字体名
+        }
     """
     from ppt_transfor.models.schema import Color
     from ppt_transfor.utils.inheritance import _resolve_schemeclr_to_rgb
 
-    props = {"font_size": None, "font_color": None, "font_name": None, "font_cap": None}
+    props = {
+        "font_size": None,
+        "font_color": None,
+        "font_name": None,
+        "font_cap": None,
+        "font_ea": None,
+        "font_cs": None,
+        "font_sym": None,
+    }
     try:
         pPr = para._element.find(f"{{{NS_A}}}pPr")
         if pPr is None:
@@ -164,18 +180,25 @@ def _extract_para_default_props(para, prs=None) -> dict:
                 if scheme is not None:
                     val = scheme.get("val")
                     if val:
-                        rgb_value = _resolve_schemeclr_to_rgb(val, prs)
+                        # 传入 scheme 元素以应用 lumOff/lumMod 等修饰符
+                        rgb_value = _resolve_schemeclr_to_rgb(val, prs, scheme)
                         if rgb_value is not None:
                             props["font_color"] = Color(type="rgb", value=rgb_value)
                         else:
                             props["font_color"] = Color(type="theme", value=val)
 
-        # 字体名
-        latin = def_rPr.find(f"{{{NS_A}}}latin")
-        if latin is not None:
-            typeface = latin.get("typeface")
-            if typeface:
-                props["font_name"] = typeface
+        # 字体名：latin/ea/cs/sym 四种字体（python-pptx 只暴露 latin via font.name）
+        for tag, key in (
+            ("latin", "font_name"),
+            ("ea", "font_ea"),
+            ("cs", "font_cs"),
+            ("sym", "font_sym"),
+        ):
+            elem = def_rPr.find(f"{{{NS_A}}}{tag}")
+            if elem is not None:
+                typeface = elem.get("typeface")
+                if typeface:
+                    props[key] = typeface
     except Exception:
         pass
 
@@ -197,6 +220,7 @@ def _parse_font(font, prs=None, inherited_props: dict | None = None) -> Font:
     model = Font()
 
     # 字体名：显式优先，继承兜底
+    # latin 字体通过 font.name 暴露；ea/cs/sym 需从 XML 直接读取
     if font.name is not None:
         model.name = font.name
     elif inherited_props and inherited_props.get("font_name"):
@@ -207,6 +231,30 @@ def _parse_font(font, prs=None, inherited_props: dict | None = None) -> Font:
         model.size = int(font.size)
     elif inherited_props and inherited_props.get("font_size") is not None:
         model.size = inherited_props["font_size"]
+
+    # 东亚/复杂脚本/符号字体：python-pptx 不暴露，需从 XML 直接读取
+    # 显式优先（run 自身 rPr），继承兜底（layout/master 的 defRPr）
+    try:
+        rPr = font._element
+    except Exception:
+        rPr = None
+    for tag, key in (
+        ("ea", "font_ea"),
+        ("cs", "font_cs"),
+        ("sym", "font_sym"),
+    ):
+        typeface = None
+        # 优先从 run 自身 rPr 读取
+        if rPr is not None:
+            elem = rPr.find(f"{{{NS_A}}}{tag}")
+            if elem is not None:
+                typeface = elem.get("typeface")
+        # 兜底从 inherited_props 读取
+        if not typeface and inherited_props and inherited_props.get(key):
+            typeface = inherited_props[key]
+        if typeface:
+            # Font 模型使用 extra="allow"，额外字段可直接存储
+            setattr(model, key, typeface)
 
     if font.bold is not None:
         model.bold = font.bold

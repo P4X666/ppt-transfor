@@ -11,3 +11,7 @@ wheels/
 
 # 输出目录（运行时产物）
 out/
+
+.trae
+
+.tmp_unzip
