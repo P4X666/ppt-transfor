@@ -128,7 +128,8 @@ def parse(pptx_path: Path, out_path: Path | None) -> None:
         out_path = _default_json_path(pptx_path)
 
     console.print(f"[cyan]解析中:[/cyan] {pptx_path}")
-    model = parse_presentation(pptx_path)
+    # 传 out_dir="out" 让图片提取为独立文件，JSON 只存相对路径
+    model = parse_presentation(pptx_path, out_dir=Path("out"))
     _model_to_json_file(model, out_path)
     console.print(f"[green]已保存 JSON:[/green] {out_path}")
     console.print(f"  幻灯片数: {len(model.slides)}")
@@ -157,7 +158,8 @@ def parse_all() -> None:
 
     for pptx_path in pptx_files:
         try:
-            model = parse_presentation(pptx_path)
+            # 传 out_dir="out" 让图片提取为独立文件，JSON 只存相对路径
+            model = parse_presentation(pptx_path, out_dir=Path("out"))
             out_path = _default_json_path(pptx_path)
             _model_to_json_file(model, out_path)
             total_shapes = sum(len(s.shapes) for s in model.slides)
@@ -242,7 +244,8 @@ def roundtrip(pptx_path: Path, keep_intermediate: bool, visual: bool) -> None:
 
     # 1. 原始 PPT → JSON
     console.print(f"[cyan]1. 解析原始 PPT:[/cyan] {pptx_path}")
-    original_model = parse_presentation(pptx_path)
+    # 传 out_dir="out" 让图片提取为独立文件，JSON 只存相对路径
+    original_model = parse_presentation(pptx_path, out_dir=Path("out"))
     _model_to_json_file(original_model, json_path)
     console.print(f"   [green]JSON 已保存:[/green] {json_path}")
 
@@ -308,9 +311,10 @@ def roundtrip_all(visual: bool) -> None:
             converted_pptx_path = _default_pptx_path(pptx_path)
             report_path = _default_report_path(pptx_path.stem)
 
-            original_model = parse_presentation(pptx_path)
+            original_model = parse_presentation(pptx_path, out_dir=Path("out"))
             _model_to_json_file(original_model, json_path)
             render_presentation(original_model, converted_pptx_path, source_pptx_path=pptx_path)
+            # 转换后 PPT 解析用于对比，不需要写图片文件，保持默认 None
             converted_model = parse_presentation(converted_pptx_path)
 
             original_dict = original_model.model_dump(exclude_none=True)

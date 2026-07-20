@@ -68,13 +68,14 @@ def _parse_group_xfrm(shape) -> tuple[tuple[int, int] | None, tuple[int, int] | 
     return child_offset, child_extent
 
 
-def parse_group(shape, slide=None, prs=None) -> dict:
+def parse_group(shape, slide=None, prs=None, media_dir=None) -> dict:
     """解析组合形状，返回类型特有字段 dict。
 
     Args:
         shape: python-pptx GroupShape 对象
         slide: 所属幻灯片（传递给子形状解析）
         prs: 所属 Presentation（传递给子形状解析）
+        media_dir: 图片输出目录（如 out/media），传递给子形状解析
 
     返回字段：
         children: 子形状列表
@@ -93,6 +94,6 @@ def parse_group(shape, slide=None, prs=None) -> dict:
 
     # 递归解析子形状
     for child in shape.shapes:
-        fields["children"].append(parse_shape(child, slide, prs))
+        fields["children"].append(parse_shape(child, slide, prs, media_dir))
 
     return fields

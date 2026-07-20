@@ -210,7 +210,10 @@ class Shape(BaseModel):
     adjustments: list[float] = []
 
     # 图片特有
+    # data_base64 保留向后兼容旧 JSON；新解析流程改用 image_path 引用外部文件
     data_base64: Optional[str] = None
+    # 图片相对路径（如 "media/abc123.png"），相对 out/ 目录
+    image_path: Optional[str] = None
     image_format: Optional[str] = None
     crop: Optional[Crop] = None
 

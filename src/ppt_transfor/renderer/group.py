@@ -62,13 +62,14 @@ def _apply_child_coords(group, model: Shape) -> None:
         ch_ext.set("cy", str(model.child_extent[1]))
 
 
-def render_group(slide, model: Shape, slide_bg_color=None):
+def render_group(slide, model: Shape, slide_bg_color=None, base_dir=None):
     """渲染组合形状，返回 python-pptx GroupShape 对象。
 
     Args:
         slide: python-pptx Slide
         model: Shape 模型（shape_type == "group"）
         slide_bg_color: 当前幻灯片背景色，传递给子形状
+        base_dir: image_path 的基准目录（如 out/），传递给子形状
 
     Returns:
         GroupShape 对象
@@ -83,7 +84,7 @@ def render_group(slide, model: Shape, slide_bg_color=None):
     except (AttributeError, TypeError):
         # 不支持 add_group_shape，降级渲染第一个子形状作为占位
         for child in model.children:
-            render_shape(slide, child)
+            render_shape(slide, child, slide_bg_color, base_dir)
         return None
 
     # 设置组合的位置和尺寸
@@ -98,7 +99,7 @@ def render_group(slide, model: Shape, slide_bg_color=None):
 
     # 递归渲染子形状到组合内
     for child in model.children:
-        render_shape(group, child, slide_bg_color)
+        render_shape(group, child, slide_bg_color, base_dir)
 
     # 回写子坐标系 chOff/chExt（关键：在添加子形状之后回写，
     # 避免 python-pptx 添加子形状时自动重算 chOff/chExt 覆盖原始值）

@@ -32,6 +32,12 @@ def render_presentation(
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
+    # image_path 的基准目录：输出 PPTX 的祖父目录（如 out/）
+    # 解析时图片存到 out/media/abc.png，JSON 中存 "media/abc.png"
+    # 渲染时 output_path=out/pptx/xxx.pptx → base_dir=out/
+    # 这样 base_dir/image_path = out/media/abc.png 能正确解析
+    base_dir = output_path.parent.parent
+
     prs = PptxPresentation()
 
     # 设置幻灯片尺寸
@@ -40,7 +46,7 @@ def render_presentation(
 
     # 遍历渲染幻灯片
     for slide_model in model.slides:
-        render_slide(prs, slide_model)
+        render_slide(prs, slide_model, base_dir)
 
     prs.save(str(output_path))
 

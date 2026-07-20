@@ -295,13 +295,14 @@ def _apply_common_props(shape, model: Shape, slide_bg_color: Color | None = None
             pass
 
 
-def render_shape(container, model: Shape, slide_bg_color: Color | None = None):
+def render_shape(container, model: Shape, slide_bg_color: Color | None = None, base_dir=None):
     """渲染单个形状到容器（slide 或 group），按类型分发。
 
     Args:
         container: python-pptx Slide 或 GroupShape
         model: Shape 模型
         slide_bg_color: 当前幻灯片背景色（solid 时），用于 BACKGROUND 填充兜底
+        base_dir: image_path 的基准目录（如 out/），传给图片渲染器
 
     Returns:
         渲染后的 python-pptx 形状对象
@@ -313,10 +314,10 @@ def render_shape(container, model: Shape, slide_bg_color: Color | None = None):
         shape = render_table(container, model)
     elif model.shape_type == "group":
         from ppt_transfor.renderer.group import render_group
-        shape = render_group(container, model, slide_bg_color)
+        shape = render_group(container, model, slide_bg_color, base_dir)
     elif model.shape_type == "picture":
         from ppt_transfor.renderer.image import render_picture
-        shape = render_picture(container, model)
+        shape = render_picture(container, model, base_dir)
     elif model.shape_type == "connector":
         from ppt_transfor.renderer.connector import render_connector
         shape = render_connector(container, model)

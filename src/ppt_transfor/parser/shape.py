@@ -377,13 +377,14 @@ def _parse_chart_part(shape, slide) -> str | None:
         return None
 
 
-def parse_shape(shape, slide=None, prs=None) -> Shape:
+def parse_shape(shape, slide=None, prs=None, media_dir=None) -> Shape:
     """解析单个形状，按类型分发到对应解析器。
 
     Args:
         shape: python-pptx Shape 对象
         slide: 所属幻灯片（用于 placeholder 继承解析）
         prs: 所属 Presentation（用于主题色固化）
+        media_dir: 图片输出目录（如 out/media），None 时降级为 base64
     """
     # 基础属性
     model = Shape(
@@ -440,7 +441,7 @@ def parse_shape(shape, slide=None, prs=None) -> Shape:
     if st == MSO_SHAPE_TYPE.GROUP:
         model.shape_type = "group"
         from ppt_transfor.parser.group import parse_group
-        group_fields = parse_group(shape, slide, prs)
+        group_fields = parse_group(shape, slide, prs, media_dir)
         model.children = group_fields["children"]
         if group_fields.get("child_offset") is not None:
             model.child_offset = group_fields["child_offset"]
@@ -451,7 +452,7 @@ def parse_shape(shape, slide=None, prs=None) -> Shape:
     if st == MSO_SHAPE_TYPE.PICTURE:
         model.shape_type = "picture"
         from ppt_transfor.parser.image import parse_picture
-        pic_fields = parse_picture(shape)
+        pic_fields = parse_picture(shape, media_dir)
         for k, v in pic_fields.items():
             setattr(model, k, v)
         # 图片也可能有文本（虽然少见）

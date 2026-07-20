@@ -46,12 +46,13 @@ def _slide_bg_color(slide_model: Slide) -> Color | None:
     return slide_model.background.color
 
 
-def render_slide(prs, slide_model: Slide):
+def render_slide(prs, slide_model: Slide, base_dir=None):
     """渲染单页幻灯片到 Presentation。
 
     Args:
         prs: python-pptx Presentation
         slide_model: Slide 模型
+        base_dir: image_path 的基准目录（如 out/），传给图片渲染器
 
     Returns:
         python-pptx Slide 对象
@@ -77,6 +78,6 @@ def render_slide(prs, slide_model: Slide):
 
     # 遍历渲染形状
     for shape_model in slide_model.shapes:
-        render_shape(slide, shape_model, slide_bg_color)
+        render_shape(slide, shape_model, slide_bg_color, base_dir)
 
     return slide

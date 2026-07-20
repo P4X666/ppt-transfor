@@ -149,13 +149,19 @@ def _ensure_text_visibility(slide_model: Slide) -> None:
 def _shape_dedup_key(model: Shape) -> str:
     """生成形状去重键。
 
-    图片用完整 base64 的 MD5 去重（不同图片 PNG header 相同但数据不同，
-    不能用前 N 字符判断）；非图片形状用类型+位置+填充组合键。
+    图片优先用 image_path 去重（路径含 MD5，天然唯一）；
+    降级用完整 base64 的 MD5 去重（旧格式或无 media_dir 场景）。
+    非图片形状用类型+位置+填充组合键。
     """
-    if model.shape_type == "picture" and model.data_base64:
-        import hashlib
+    if model.shape_type == "picture":
+        # 优先用 image_path 去重（新格式，路径已含 MD5）
+        if model.image_path:
+            return f"pic:{model.image_path}"
+        # 降级用 base64 MD5（旧格式/无 media_dir）
+        if model.data_base64:
+            import hashlib
 
-        return f"pic:{hashlib.md5(model.data_base64.encode()).hexdigest()}"
+            return f"pic:{hashlib.md5(model.data_base64.encode()).hexdigest()}"
     # 非图片形状：用类型+位置+填充组合去重
     fill_str = ""
     if model.fill and model.fill.color and model.fill.color.value:
@@ -217,7 +223,7 @@ def _has_fullscreen_picture(slide, prs=None) -> bool:
     return False
 
 
-def _parse_inherited_pictures(slide, prs=None) -> list[Shape]:
+def _parse_inherited_pictures(slide, prs=None, media_dir=None) -> list[Shape]:
     """解析布局/母版上继承的非 placeholder 形状，返回 Shape 列表。
 
     转换后 PPT 使用 Blank 布局，布局/母版继承的形状会丢失。
@@ -261,7 +267,7 @@ def _parse_inherited_pictures(slide, prs=None) -> list[Shape]:
 
     for container in containers:
         for shape in _collect_non_placeholder_shapes(container, prs):
-            model = parse_shape(shape, None, prs)
+            model = parse_shape(shape, None, prs, media_dir)
             key = _shape_dedup_key(model)
             if key in seen_keys:
                 continue
@@ -271,13 +277,14 @@ def _parse_inherited_pictures(slide, prs=None) -> list[Shape]:
     return inherited
 
 
-def parse_slide(slide, index: int, prs=None) -> Slide:
+def parse_slide(slide, index: int, prs=None, media_dir=None) -> Slide:
     """解析单页幻灯片
 
     Args:
         slide: python-pptx Slide 对象
         index: 幻灯片索引
         prs: 所属 Presentation 对象（传递给 shape 解析用于继承解析）
+        media_dir: 图片输出目录（如 out/media），None 时降级为 base64
     """
     model = Slide(index=index)
 
@@ -294,11 +301,11 @@ def parse_slide(slide, index: int, prs=None) -> Slide:
 
     # 遍历形状
     for shape in slide.shapes:
-        model.shapes.append(parse_shape(shape, slide, prs))
+        model.shapes.append(parse_shape(shape, slide, prs, media_dir))
 
     # 前置布局/母版继承的图片（渲染在底层，保证视觉保真）
     # 转换后 PPT 使用 Blank 布局，不提取则布局/母版图片全部丢失
-    inherited_pictures = _parse_inherited_pictures(slide, prs)
+    inherited_pictures = _parse_inherited_pictures(slide, prs, media_dir)
     if inherited_pictures:
         model.shapes = inherited_pictures + model.shapes
 
